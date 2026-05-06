@@ -44,7 +44,7 @@ except ImportError:
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-ZIP_CODE           = "85042"
+ZIP_CODE           = ""
 RADIUS_MILES       = 50
 RADIUS             = f"{RADIUS_MILES} Miles"
 CHECK_INTERVAL_MIN = 60
@@ -408,10 +408,41 @@ class App:
                  bg=BG, fg=FG, font=("Helvetica", 13, "bold")).pack(
                  anchor="w", padx=18, pady=(16, 2))
         tk.Label(dlg,
-                 text="Tick the games you want checked this session. Your custom\n"
-                      "additions are shown at the bottom.",
+                 text="Enter your location, pick your games, and hit Start.",
                  bg=BG, fg=DIM, font=("Helvetica", 9),
                  justify="left").pack(anchor="w", padx=18, pady=(0, 10))
+
+        # ── Zip + Radius row ──────────────────────────────────────────────────
+        loc_frame = tk.Frame(dlg, bg=CARD, highlightbackground=EDGE,
+                             highlightthickness=1)
+        loc_frame.pack(fill="x", padx=18, pady=(0, 12))
+
+        loc_inner = tk.Frame(loc_frame, bg=CARD)
+        loc_inner.pack(fill="x", padx=12, pady=10)
+
+        # Zip label + entry
+        tk.Label(loc_inner, text="📍  Your Zip Code", bg=CARD, fg=DIM,
+                 font=("Helvetica", 9)).pack(anchor="w")
+        zip_var = tk.StringVar(value=self.zip_code if self.zip_code != ZIP_CODE else "")
+        zip_entry = tk.Entry(loc_inner, textvariable=zip_var, bg=BG, fg=FG,
+                             insertbackground=FG, relief="flat",
+                             font=("Helvetica", 14, "bold"), width=12)
+        zip_entry.pack(anchor="w", pady=(2, 0))
+
+        # Divider
+        tk.Frame(loc_inner, bg=EDGE, height=1).pack(fill="x", pady=8)
+
+        # Radius label + radio buttons
+        tk.Label(loc_inner, text="🔍  Search Radius", bg=CARD, fg=DIM,
+                 font=("Helvetica", 9)).pack(anchor="w")
+        radius_var = tk.StringVar(value=str(self.radius_mi))
+        rad_row = tk.Frame(loc_inner, bg=CARD)
+        rad_row.pack(anchor="w", pady=(4, 0))
+        for mi in ["15", "25", "50", "100"]:
+            tk.Radiobutton(rad_row, text=f"{mi} mi", variable=radius_var, value=mi,
+                           bg=CARD, fg=FG, selectcolor=BG, activebackground=CARD,
+                           activeforeground=FG, font=("Helvetica", 10),
+                           cursor="hand2").pack(side="left", padx=(0, 14))
 
         # ── Scrollable content ────────────────────────────────────────────────
         outer = tk.Frame(dlg, bg=BG)
@@ -537,10 +568,25 @@ class App:
         update_count()
 
         def on_start():
+            # Validate zip
+            z = zip_var.get().strip()
+            if not z:
+                zip_entry.config(bg="#331111")
+                zip_entry.focus_set()
+                return
+            zip_entry.config(bg=BG)
+
             selected_ids = {gid for gid, v in check_vars.items() if v.get()}
             if not selected_ids:
                 count_lbl.config(text="Pick at least one game!", fg=D_ERR)
                 return
+
+            # Save zip + radius to settings
+            self.zip_code  = z
+            self.radius_mi = int(radius_var.get())
+            self._save_settings()
+            self.settings_lbl.config(text=self._settings_text())
+
             # Build runtime list: catalog games in catalog order, then custom
             selected = [g for g in GAME_CATALOG if g["id"] in selected_ids]
             selected += [g for g in custom       if g["id"] in selected_ids]
@@ -1575,7 +1621,7 @@ class App:
                 return []
 
             # ── 5. Wait for modal to fully appear ─────────────────────────────
-            await self._human_pause(1.5, 3.0)
+            await self._human_pause(2.5, 4.0)
 
             # ── 6. Type zip code one character at a time ─────────────────────
             log(f"Typing zip {self.zip_code}…")
@@ -1595,7 +1641,30 @@ class App:
                 log("Could not find zip input", "err")
                 return []
 
-            await self._human_pause(0.6, 1.5)
+            # Pause after typing — let any autocomplete dropdown appear
+            await self._human_pause(1.2, 2.0)
+
+            # Dismiss autocomplete dropdown with Down + Enter if it appeared
+            try:
+                dropdown_sels = [
+                    "[class*='autocomplete'] li",
+                    "[class*='suggestion']",
+                    "[class*='dropdown'] li",
+                    "[role='option']",
+                    "[role='listbox'] li",
+                ]
+                for dsel in dropdown_sels:
+                    if await page.locator(dsel).first.is_visible(timeout=1_000):
+                        log("Autocomplete dropdown found — pressing Down + Enter")
+                        await page.keyboard.press("ArrowDown")
+                        await self._human_pause(0.4, 0.7)
+                        await page.keyboard.press("Enter")
+                        await self._human_pause(0.6, 1.0)
+                        break
+            except Exception:
+                pass
+
+            await self._human_pause(0.8, 1.5)
 
             # ── 7. Set radius dropdown ────────────────────────────────────────
             log(f"Setting radius to {self.radius_mi} miles…")
@@ -1607,12 +1676,12 @@ class App:
                     if await el.is_visible(timeout=2_000):
                         await self._human_move(page, el)
                         await el.select_option(label=f"{self.radius_mi} Miles")
-                        await self._human_pause(0.4, 1.0)
+                        await self._human_pause(0.6, 1.2)
                         break
                 except Exception:
                     continue
 
-            await self._human_pause(0.8, 1.8)
+            await self._human_pause(1.0, 2.0)
 
             # ── 8. Click Search ───────────────────────────────────────────────
             log("Clicking Search…")
@@ -1625,9 +1694,36 @@ class App:
                 except Exception:
                     continue
 
-            # ── 9. Wait for results (longer — results take time to load) ──────
+            # ── 9. Wait for results ───────────────────────────────────────────
             log("Waiting for results…")
-            await self._human_pause(3.0, 5.0)
+            await self._human_pause(4.0, 6.0)
+
+            # ── 9a. Dismiss "nickname" / "save location" dialog if it appears ─
+            # GameStop sometimes asks you to save this location with a nickname
+            try:
+                nickname_sels = [
+                    "button:has-text('No')",
+                    "button:has-text('No Thanks')",
+                    "button:has-text('No, thanks')",
+                    "button:has-text('Skip')",
+                    "button:has-text('Cancel')",
+                    "[aria-label*='close' i]:visible",
+                    "[class*='modal'] button:has-text('No')",
+                    "[class*='dialog'] button:has-text('No')",
+                ]
+                for nsel in nickname_sels:
+                    try:
+                        nbtn = page.locator(nsel).first
+                        if await nbtn.is_visible(timeout=1_500):
+                            log("Nickname/save dialog found — dismissing")
+                            await self._human_pause(0.4, 0.8)
+                            await self._human_click(page, nbtn)
+                            await self._human_pause(0.8, 1.5)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
             # ── 10. Check for no-stock message ────────────────────────────────
             for phrase in ["Sorry, no store", "no store within", "currently has inventory"]:
