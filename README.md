@@ -10,7 +10,6 @@ Built with Python + Patchright (stealth browser automation). Checks your local G
 
 ---
 
-## Screenshots
 
 > The app sitting in the corner of your screen, quietly watching.
 
