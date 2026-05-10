@@ -274,9 +274,11 @@ class App:
 
         # ── User-editable settings (loaded from config, saved on change) ──────
         cfg = self._load_settings()
-        self.zip_code    = cfg.get("zip_code",    ZIP_CODE)
-        self.radius_mi   = int(cfg.get("radius_miles", str(RADIUS_MILES)))
+        self.zip_code     = cfg.get("zip_code",    ZIP_CODE)
+        self.radius_mi    = int(cfg.get("radius_miles", str(RADIUS_MILES)))
         self.interval_min = int(cfg.get("interval_min", str(CHECK_INTERVAL_MIN)))
+        self.multi_mode   = cfg.get("multi_mode", "0") == "1"
+        self.multi_zips   = [z.strip() for z in cfg.get("multi_zips", "").split(",") if z.strip()]
 
         # runtime games list (can be edited while app is running)
         self.runtime_games = load_games()
@@ -615,7 +617,18 @@ class App:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _settings_text(self):
+        if self.multi_mode and self.multi_zips:
+            zips = ", ".join(self.multi_zips[:3])
+            if len(self.multi_zips) > 3:
+                zips += f" +{len(self.multi_zips)-3}"
+            return f"🌐 Multi-city ({len(self.multi_zips)} zips)  ·  {self.radius_mi} mi  ·  every {self.interval_min} min"
         return f"Zip {self.zip_code}  ·  {self.radius_mi} mi  ·  every {self.interval_min} min"
+
+    def _active_zip(self) -> str:
+        """Return the zip to use for the current game check."""
+        if self.multi_mode and self.multi_zips:
+            return random.choice(self.multi_zips)
+        return self.zip_code
 
     def _load_settings(self) -> dict:
         cfg = configparser.ConfigParser()
@@ -631,6 +644,8 @@ class App:
             "zip_code":     self.zip_code,
             "radius_miles": str(self.radius_mi),
             "interval_min": str(self.interval_min),
+            "multi_mode":   "1" if self.multi_mode else "0",
+            "multi_zips":   ", ".join(self.multi_zips),
         }
         with open(CONFIG_FILE, "w") as f:
             cfg.write(f)
@@ -639,58 +654,124 @@ class App:
         dlg = tk.Toplevel(self.root)
         dlg.title("Settings")
         dlg.configure(bg=BG)
-        dlg.resizable(False, False)
+        dlg.resizable(False, True)
         dlg.grab_set()
 
         self.root.update_idletasks()
-        x = self.root.winfo_x() + self.root.winfo_width()  // 2 - 175
-        y = self.root.winfo_y() + self.root.winfo_height() // 2 - 140
-        dlg.geometry(f"350x310+{x}+{y}")
+        x = self.root.winfo_x() + self.root.winfo_width()  // 2 - 200
+        y = self.root.winfo_y() + self.root.winfo_height() // 2 - 200
+        dlg.geometry(f"400x540+{x}+{y}")
 
         pad = {"padx": 20, "anchor": "w"}
 
         tk.Label(dlg, text="⚙  Settings", bg=BG, fg=FG,
-                 font=("Helvetica", 13, "bold")).pack(**pad, pady=(18, 4))
-        tk.Label(dlg, text="These are shared when you send the tool to a friend.",
-                 bg=BG, fg=DIM, font=("Helvetica", 9),
-                 wraplength=310, justify="left").pack(**pad, pady=(0, 14))
+                 font=("Helvetica", 13, "bold")).pack(**pad, pady=(18, 14))
 
-        # ── Zip code
+        # ── HOME MODE ────────────────────────────────────────────────────────
+        tk.Label(dlg, text="HOME MODE", bg=BG, fg=DIM,
+                 font=("Helvetica", 9, "bold")).pack(**pad, pady=(0, 4))
+
         tk.Label(dlg, text="Zip Code / Postal Code", bg=BG, fg=FG,
                  font=("Helvetica", 10)).pack(**pad)
         zip_var = tk.StringVar(value=self.zip_code)
         zip_entry = tk.Entry(dlg, textvariable=zip_var, bg=CARD, fg=FG,
                              insertbackground=FG, relief="flat",
                              font=("Helvetica", 12), width=14)
-        zip_entry.pack(padx=20, anchor="w", pady=(2, 12))
+        zip_entry.pack(padx=20, anchor="w", pady=(2, 10))
 
-        # ── Radius
         tk.Label(dlg, text="Search Radius (miles)", bg=BG, fg=FG,
                  font=("Helvetica", 10)).pack(**pad)
         radius_var = tk.StringVar(value=str(self.radius_mi))
-        radius_frame = tk.Frame(dlg, bg=BG)
-        radius_frame.pack(padx=20, anchor="w", pady=(2, 12))
+        rad_row = tk.Frame(dlg, bg=BG)
+        rad_row.pack(padx=20, anchor="w", pady=(2, 10))
         for val in ["15", "25", "50", "100"]:
-            tk.Radiobutton(
-                radius_frame, text=f"{val} mi", variable=radius_var, value=val,
-                bg=BG, fg=FG, selectcolor=CARD, activebackground=BG,
-                activeforeground=FG, font=("Helvetica", 10),
-            ).pack(side="left", padx=(0, 12))
+            tk.Radiobutton(rad_row, text=f"{val} mi", variable=radius_var, value=val,
+                           bg=BG, fg=FG, selectcolor=CARD, activebackground=BG,
+                           activeforeground=FG, font=("Helvetica", 10),
+                           cursor="hand2").pack(side="left", padx=(0, 12))
 
-        # ── Interval
         tk.Label(dlg, text="Check Interval (minutes)", bg=BG, fg=FG,
                  font=("Helvetica", 10)).pack(**pad)
         interval_var = tk.StringVar(value=str(self.interval_min))
-        interval_frame = tk.Frame(dlg, bg=BG)
-        interval_frame.pack(padx=20, anchor="w", pady=(2, 16))
+        int_row = tk.Frame(dlg, bg=BG)
+        int_row.pack(padx=20, anchor="w", pady=(2, 14))
         for val in ["30", "60", "90", "120"]:
-            tk.Radiobutton(
-                interval_frame, text=f"{val}m", variable=interval_var, value=val,
-                bg=BG, fg=FG, selectcolor=CARD, activebackground=BG,
-                activeforeground=FG, font=("Helvetica", 10),
-            ).pack(side="left", padx=(0, 10))
+            tk.Radiobutton(int_row, text=f"{val}m", variable=interval_var, value=val,
+                           bg=BG, fg=FG, selectcolor=CARD, activebackground=BG,
+                           activeforeground=FG, font=("Helvetica", 10),
+                           cursor="hand2").pack(side="left", padx=(0, 10))
 
-        # ── Buttons
+        # ── SEPARATOR ─────────────────────────────────────────────────────────
+        tk.Frame(dlg, bg=EDGE, height=1).pack(fill="x", padx=20, pady=(0, 12))
+
+        # ── MULTI-CITY MODE ───────────────────────────────────────────────────
+        mode_var = tk.BooleanVar(value=self.multi_mode)
+
+        hdr = tk.Frame(dlg, bg=BG)
+        hdr.pack(fill="x", padx=20, pady=(0, 4))
+        tk.Label(hdr, text="MULTI-CITY MODE", bg=BG, fg=DIM,
+                 font=("Helvetica", 9, "bold")).pack(side="left")
+        mode_toggle = tk.Checkbutton(hdr, text="Enable", variable=mode_var,
+                                     bg=BG, fg=FG, selectcolor=CARD,
+                                     activebackground=BG, activeforeground=FG,
+                                     font=("Helvetica", 10), cursor="hand2")
+        mode_toggle.pack(side="right")
+
+        tk.Label(dlg,
+                 text="Add zip codes for multiple cities. Each game check will\n"
+                      "randomly pick one — great for searching for friends.",
+                 bg=BG, fg=DIM, font=("Helvetica", 9),
+                 wraplength=360, justify="left").pack(padx=20, anchor="w", pady=(0, 8))
+
+        # Zip list
+        zips_frame = tk.Frame(dlg, bg=BG)
+        zips_frame.pack(fill="x", padx=20, pady=(0, 6))
+
+        zip_list = list(self.multi_zips)
+
+        def refresh_zips():
+            for w in zips_frame.winfo_children():
+                w.destroy()
+            for zi, z in enumerate(zip_list):
+                row = tk.Frame(zips_frame, bg=CARD,
+                               highlightbackground=EDGE, highlightthickness=1)
+                row.pack(fill="x", pady=1)
+                tk.Label(row, text=z, bg=CARD, fg=FG,
+                         font=("Helvetica", 11), padx=10, pady=4).pack(side="left")
+                def rm(idx=zi):
+                    zip_list.pop(idx)
+                    refresh_zips()
+                tk.Button(row, text=" ✕ ", bg=CARD, fg=DIM,
+                          activebackground=EDGE, relief="flat",
+                          cursor="hand2", command=rm).pack(side="right")
+
+        refresh_zips()
+
+        # Add zip row
+        add_row = tk.Frame(dlg, bg=BG)
+        add_row.pack(fill="x", padx=20, pady=(0, 4))
+        new_zip_var = tk.StringVar()
+        new_zip_entry = tk.Entry(add_row, textvariable=new_zip_var,
+                                 bg=CARD, fg=FG, insertbackground=FG,
+                                 relief="flat", font=("Helvetica", 11), width=12)
+        new_zip_entry.pack(side="left")
+
+        def add_zip():
+            z = new_zip_var.get().strip()
+            if z and z not in zip_list:
+                zip_list.append(z)
+                refresh_zips()
+                new_zip_var.set("")
+                new_zip_entry.focus_set()
+        tk.Button(add_row, text="  + Add  ", bg=EDGE, fg=FG,
+                  activebackground="#333355", relief="flat",
+                  padx=8, pady=3, cursor="hand2",
+                  font=("Helvetica", 10), command=add_zip).pack(side="left", padx=(8, 0))
+        new_zip_entry.bind("<Return>", lambda e: add_zip())
+
+        # ── SAVE BUTTON ───────────────────────────────────────────────────────
+        tk.Frame(dlg, bg=EDGE, height=1).pack(fill="x", padx=20, pady=(10, 10))
+
         btn_row = tk.Frame(dlg, bg=BG)
         btn_row.pack(fill="x", padx=20, pady=(0, 16))
 
@@ -702,9 +783,12 @@ class App:
             self.zip_code     = z
             self.radius_mi    = int(radius_var.get())
             self.interval_min = int(interval_var.get())
+            self.multi_mode   = mode_var.get()
+            self.multi_zips   = list(zip_list)
             self._save_settings()
             self.settings_lbl.config(text=self._settings_text())
-            self._log(f"Settings saved — Zip {self.zip_code}, {self.radius_mi}mi, "
+            mode_label = "🌐 Multi-city" if self.multi_mode else "🏠 Home"
+            self._log(f"Settings saved — {mode_label} mode, {self.radius_mi}mi, "
                       f"every {self.interval_min}min", "ok")
             dlg.destroy()
 
@@ -719,7 +803,6 @@ class App:
 
         dlg.bind("<Return>", lambda e: on_save())
         zip_entry.focus_set()
-        zip_entry.select_range(0, "end")
 
     # ─────────────────────────────────────────────────────────────────────────
     # GAME ROWS — build / rebuild
@@ -1250,11 +1333,20 @@ class App:
                     break
 
                 product = self.runtime_games[i]
+
+                # Pick zip — random from multi-zip list or home zip
+                active_zip = self._active_zip()
+                if self.multi_mode and self.multi_zips:
+                    self.q.put({"type": "log",
+                                "text": f"  🌐 Using zip {active_zip} for {product['name']}",
+                                "tag": "dim"})
+
                 self.q.put({"type": "status", "idx": i, "status": "checking"})
 
                 try:
                     stores = await asyncio.wait_for(
-                        self._check_api(page, i, product, csrf_token), timeout=30)
+                        self._check_api(page, i, product, csrf_token,
+                                        zip_override=active_zip), timeout=30)
                 except asyncio.TimeoutError:
                     stores = None
                     self.q.put({"type": "log",
@@ -1266,7 +1358,8 @@ class App:
                                 "tag": "warn"})
                     try:
                         stores = await asyncio.wait_for(
-                            self._check_ui(page, i, product), timeout=90)
+                            self._check_ui(page, i, product,
+                                           zip_override=active_zip), timeout=90)
                     except asyncio.TimeoutError:
                         stores = []
                         self.q.put({"type": "log",
@@ -1441,14 +1534,16 @@ class App:
     # API CHECK  (fast — one POST request per game)
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _check_api(self, page, idx, product, csrf_token):
+    async def _check_api(self, page, idx, product, csrf_token, zip_override=None):
         """
         Call GameStop's internal Stores-FindStores endpoint using the browser's
         own fetch() — this inherits the session cookies so it never gets a 403.
         Returns list of store dicts, empty list if none, or None if the call failed.
         """
-        name = product["name"]
-        pid  = product["id"]
+        name     = product["name"]
+        pid      = product["id"]
+        zip_code = zip_override or self.zip_code
+        radius   = self.radius_mi
 
         self.q.put({"type": "log", "text": f"  [{name}] API call (browser-based)…"})
 
@@ -1460,8 +1555,8 @@ class App:
             f"&source=pdp&showMap=false"
             f"&products={pid}:1"
             f"&selectedStore=undefined"
-            f"&postalCode={self.zip_code}"
-            f"&radius={self.radius_mi}"
+            f"&postalCode={zip_code}"
+            f"&radius={radius}"
         )
         api_url = (
             "https://www.gamestop.com/on/demandware.store/Sites-gamestop-us-Site/"
@@ -1554,14 +1649,12 @@ class App:
     # UI FALLBACK CHECK  (original method, used only when API fails)
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _check_ui(self, page, idx, product):
-        """
-        Full UI automation with human-like pacing.
-        Every action has natural mouse movement, realistic typing speed,
-        and random pauses so it looks like a person browsing slowly.
-        """
-        stores = []
-        name = product["name"]
+    async def _check_ui(self, page, idx, product, zip_override=None):
+        """Full UI automation with human-like pacing."""
+        stores   = []
+        name     = product["name"]
+        zip_code = zip_override or self.zip_code
+        radius   = self.radius_mi
         def log(msg, tag=""):
             self.q.put({"type": "log", "text": f"  [{name}] {msg}", "tag": tag})
 
@@ -1624,14 +1717,14 @@ class App:
             await self._human_pause(2.5, 4.0)
 
             # ── 6. Type zip code one character at a time ─────────────────────
-            log(f"Typing zip {self.zip_code}…")
+            log(f"Typing zip {zip_code}…")
             zip_filled = False
             for sel in ["input[placeholder*='ZIP']", "input[placeholder*='Zip']",
                         "input[placeholder*='City']", "#zipCodeField"]:
                 try:
                     inp = page.locator(sel).first
                     if await inp.is_visible(timeout=3_000):
-                        await self._human_type(page, inp, self.zip_code)
+                        await self._human_type(page, inp, zip_code)
                         zip_filled = True
                         break
                 except Exception:
@@ -1667,7 +1760,7 @@ class App:
             await self._human_pause(0.8, 1.5)
 
             # ── 7. Set radius dropdown ────────────────────────────────────────
-            log(f"Setting radius to {self.radius_mi} miles…")
+            log(f"Setting radius to {radius} miles…")
             for sel in ["select:near(label:has-text('Radius'))",
                         "select:near(text='RADIUS')", ".store-radius-select",
                         "select[name*='radius']"]:
@@ -1675,7 +1768,7 @@ class App:
                     el = page.locator(sel).first
                     if await el.is_visible(timeout=2_000):
                         await self._human_move(page, el)
-                        await el.select_option(label=f"{self.radius_mi} Miles")
+                        await el.select_option(label=f"{radius} Miles")
                         await self._human_pause(0.6, 1.2)
                         break
                 except Exception:
