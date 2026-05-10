@@ -107,6 +107,7 @@ The **☰ Menu** button in the top-right opens:
 - **Manage Games** — add or remove games, paste any GameStop URL
 - **Settings** — change zip code, radius, and check interval
 - **Test Alert** — preview the chime sound before it surprises you
+- **Multi Zip Code Mode** - Add checking for zip codes all around the country!
 - **Stop / Start Checker**
 
 ### Snooze
