@@ -1372,13 +1372,16 @@ class App:
                     has_in = any(s["status"] == "In Stock" for s in stores)
                     detail = "  ·  ".join(
                         f"{s['store']} ({s['distance']})" for s in stores)
+                    # Prepend zip when in multi-city mode so user knows which city
+                    if self.multi_mode and self.multi_zips:
+                        detail = f"📍 {active_zip}  —  " + detail
                     kind  = "in_stock" if has_in else "limited"
                     tag   = "ok" if has_in else "warn"
                     label = "In Stock" if has_in else "Limited Stock"
                     self.q.put({"type": "status", "idx": i, "status": kind,
                                 "detail": detail, "ts": ts_str})
                     self.q.put({"type": "log",
-                                "text": f"  ★ {label}: {product['name']} → {detail}",
+                                "text": f"  ★ {label}: {product['name']} [{active_zip}] → {detail}",
                                 "tag": tag})
                     self.q.put({"type": "alert", "game": product["name"], "detail": detail})
                     self._desktop_notify(f"🎮 {label}: {product['name']}", detail)
