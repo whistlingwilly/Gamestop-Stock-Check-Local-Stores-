@@ -278,7 +278,18 @@ class App:
         self.radius_mi    = int(cfg.get("radius_miles", str(RADIUS_MILES)))
         self.interval_min = int(cfg.get("interval_min", str(CHECK_INTERVAL_MIN)))
         self.multi_mode   = cfg.get("multi_mode", "0") == "1"
-        self.multi_zips   = [z.strip() for z in cfg.get("multi_zips", "").split(",") if z.strip()]
+        # multi_zips stored as "zip:radius,zip:radius,..." e.g. "90210:25,10001:15"
+        raw = cfg.get("multi_zips", "")
+        self.multi_zips = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" in part:
+                z, r = part.split(":", 1)
+                self.multi_zips.append({"zip": z.strip(), "radius": int(r.strip())})
+            elif part:
+                self.multi_zips.append({"zip": part, "radius": 25})
 
         # runtime games list (can be edited while app is running)
         self.runtime_games = load_games()
@@ -618,17 +629,15 @@ class App:
 
     def _settings_text(self):
         if self.multi_mode and self.multi_zips:
-            zips = ", ".join(self.multi_zips[:3])
-            if len(self.multi_zips) > 3:
-                zips += f" +{len(self.multi_zips)-3}"
-            return f"🌐 Multi-city ({len(self.multi_zips)} zips)  ·  {self.radius_mi} mi  ·  every {self.interval_min} min"
+            return f"🌐 Multi-city ({len(self.multi_zips)} zips)  ·  every {self.interval_min} min"
         return f"Zip {self.zip_code}  ·  {self.radius_mi} mi  ·  every {self.interval_min} min"
 
-    def _active_zip(self) -> str:
-        """Return the zip to use for the current game check."""
+    def _active_zip(self) -> dict:
+        """Return {zip, radius} to use for the current game check."""
         if self.multi_mode and self.multi_zips:
-            return random.choice(self.multi_zips)
-        return self.zip_code
+            entry = random.choice(self.multi_zips)
+            return {"zip": entry["zip"], "radius": entry["radius"]}
+        return {"zip": self.zip_code, "radius": self.radius_mi}
 
     def _load_settings(self) -> dict:
         cfg = configparser.ConfigParser()
@@ -645,7 +654,7 @@ class App:
             "radius_miles": str(self.radius_mi),
             "interval_min": str(self.interval_min),
             "multi_mode":   "1" if self.multi_mode else "0",
-            "multi_zips":   ", ".join(self.multi_zips),
+            "multi_zips":   ", ".join(f"{e['zip']}:{e['radius']}" for e in self.multi_zips),
         }
         with open(CONFIG_FILE, "w") as f:
             cfg.write(f)
@@ -727,46 +736,82 @@ class App:
         zips_frame = tk.Frame(dlg, bg=BG)
         zips_frame.pack(fill="x", padx=20, pady=(0, 6))
 
-        zip_list = list(self.multi_zips)
+        zip_list = [dict(e) for e in self.multi_zips]  # copy
 
         def refresh_zips():
             for w in zips_frame.winfo_children():
                 w.destroy()
-            for zi, z in enumerate(zip_list):
+            for zi, entry in enumerate(zip_list):
                 row = tk.Frame(zips_frame, bg=CARD,
                                highlightbackground=EDGE, highlightthickness=1)
                 row.pack(fill="x", pady=1)
-                tk.Label(row, text=z, bg=CARD, fg=FG,
-                         font=("Helvetica", 11), padx=10, pady=4).pack(side="left")
+
+                # Zip label
+                tk.Label(row, text=entry["zip"], bg=CARD, fg=FG,
+                         font=("Helvetica", 11, "bold"), padx=10,
+                         pady=4, width=8, anchor="w").pack(side="left")
+
+                # Radius badge
+                rad_col = "#2a5522" if entry["radius"] <= 25 else "#553322"
+                tk.Label(row, text=f"{entry['radius']} mi", bg=rad_col, fg="white",
+                         font=("Helvetica", 9, "bold"), padx=6,
+                         pady=2).pack(side="left", padx=(0, 8))
+
+                # Radius change buttons
+                for mi in [15, 25, 50, 100]:
+                    active = entry["radius"] == mi
+                    def set_r(idx=zi, r=mi):
+                        zip_list[idx]["radius"] = r
+                        refresh_zips()
+                    btn = tk.Button(row, text=f"{mi}", bg=EDGE if not active else "#335533",
+                                   fg=FG, activebackground="#333355",
+                                   relief="flat", padx=4, pady=1, cursor="hand2",
+                                   font=("Helvetica", 8), command=set_r)
+                    btn.pack(side="left", padx=1)
+
                 def rm(idx=zi):
                     zip_list.pop(idx)
                     refresh_zips()
                 tk.Button(row, text=" ✕ ", bg=CARD, fg=DIM,
                           activebackground=EDGE, relief="flat",
-                          cursor="hand2", command=rm).pack(side="right")
+                          cursor="hand2", command=rm).pack(side="right", padx=4)
 
         refresh_zips()
 
         # Add zip row
         add_row = tk.Frame(dlg, bg=BG)
-        add_row.pack(fill="x", padx=20, pady=(0, 4))
+        add_row.pack(fill="x", padx=20, pady=(4, 4))
+
+        tk.Label(add_row, text="Zip:", bg=BG, fg=DIM,
+                 font=("Helvetica", 9)).pack(side="left", padx=(0, 4))
         new_zip_var = tk.StringVar()
         new_zip_entry = tk.Entry(add_row, textvariable=new_zip_var,
                                  bg=CARD, fg=FG, insertbackground=FG,
-                                 relief="flat", font=("Helvetica", 11), width=12)
+                                 relief="flat", font=("Helvetica", 11), width=10)
         new_zip_entry.pack(side="left")
+
+        tk.Label(add_row, text="  Radius:", bg=BG, fg=DIM,
+                 font=("Helvetica", 9)).pack(side="left", padx=(6, 4))
+        new_rad_var = tk.StringVar(value="25")
+        rad_opt = tk.OptionMenu(add_row, new_rad_var, "15", "25", "50", "100")
+        rad_opt.config(bg=CARD, fg=FG, activebackground=EDGE, activeforeground=FG,
+                       relief="flat", font=("Helvetica", 9), bd=0,
+                       highlightthickness=0, width=4)
+        rad_opt.pack(side="left")
+        tk.Label(add_row, text="mi", bg=BG, fg=DIM,
+                 font=("Helvetica", 9)).pack(side="left", padx=(2, 6))
 
         def add_zip():
             z = new_zip_var.get().strip()
-            if z and z not in zip_list:
-                zip_list.append(z)
+            if z and not any(e["zip"] == z for e in zip_list):
+                zip_list.append({"zip": z, "radius": int(new_rad_var.get())})
                 refresh_zips()
                 new_zip_var.set("")
                 new_zip_entry.focus_set()
         tk.Button(add_row, text="  + Add  ", bg=EDGE, fg=FG,
                   activebackground="#333355", relief="flat",
                   padx=8, pady=3, cursor="hand2",
-                  font=("Helvetica", 10), command=add_zip).pack(side="left", padx=(8, 0))
+                  font=("Helvetica", 10), command=add_zip).pack(side="left")
         new_zip_entry.bind("<Return>", lambda e: add_zip())
 
         # ── SAVE BUTTON ───────────────────────────────────────────────────────
@@ -784,7 +829,7 @@ class App:
             self.radius_mi    = int(radius_var.get())
             self.interval_min = int(interval_var.get())
             self.multi_mode   = mode_var.get()
-            self.multi_zips   = list(zip_list)
+            self.multi_zips   = [dict(e) for e in zip_list]
             self._save_settings()
             self.settings_lbl.config(text=self._settings_text())
             mode_label = "🌐 Multi-city" if self.multi_mode else "🏠 Home"
@@ -1334,11 +1379,13 @@ class App:
 
                 product = self.runtime_games[i]
 
-                # Pick zip — random from multi-zip list or home zip
-                active_zip = self._active_zip()
+                # Pick zip+radius — random from multi-zip list or home settings
+                active = self._active_zip()
+                active_zip    = active["zip"]
+                active_radius = active["radius"]
                 if self.multi_mode and self.multi_zips:
                     self.q.put({"type": "log",
-                                "text": f"  🌐 Using zip {active_zip} for {product['name']}",
+                                "text": f"  🌐 {active_zip} ({active_radius}mi) — {product['name']}",
                                 "tag": "dim"})
 
                 self.q.put({"type": "status", "idx": i, "status": "checking"})
@@ -1346,7 +1393,8 @@ class App:
                 try:
                     stores = await asyncio.wait_for(
                         self._check_api(page, i, product, csrf_token,
-                                        zip_override=active_zip), timeout=30)
+                                        zip_override=active_zip,
+                                        radius_override=active_radius), timeout=30)
                 except asyncio.TimeoutError:
                     stores = None
                     self.q.put({"type": "log",
@@ -1359,7 +1407,8 @@ class App:
                     try:
                         stores = await asyncio.wait_for(
                             self._check_ui(page, i, product,
-                                           zip_override=active_zip), timeout=90)
+                                           zip_override=active_zip,
+                                           radius_override=active_radius), timeout=90)
                     except asyncio.TimeoutError:
                         stores = []
                         self.q.put({"type": "log",
@@ -1537,16 +1586,11 @@ class App:
     # API CHECK  (fast — one POST request per game)
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _check_api(self, page, idx, product, csrf_token, zip_override=None):
-        """
-        Call GameStop's internal Stores-FindStores endpoint using the browser's
-        own fetch() — this inherits the session cookies so it never gets a 403.
-        Returns list of store dicts, empty list if none, or None if the call failed.
-        """
+    async def _check_api(self, page, idx, product, csrf_token, zip_override=None, radius_override=None):
         name     = product["name"]
         pid      = product["id"]
         zip_code = zip_override or self.zip_code
-        radius   = self.radius_mi
+        radius   = radius_override if radius_override is not None else self.radius_mi
 
         self.q.put({"type": "log", "text": f"  [{name}] API call (browser-based)…"})
 
@@ -1652,12 +1696,12 @@ class App:
     # UI FALLBACK CHECK  (original method, used only when API fails)
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _check_ui(self, page, idx, product, zip_override=None):
+    async def _check_ui(self, page, idx, product, zip_override=None, radius_override=None):
         """Full UI automation with human-like pacing."""
         stores   = []
         name     = product["name"]
         zip_code = zip_override or self.zip_code
-        radius   = self.radius_mi
+        radius   = radius_override if radius_override is not None else self.radius_mi
         def log(msg, tag=""):
             self.q.put({"type": "log", "text": f"  [{name}] {msg}", "tag": tag})
 
